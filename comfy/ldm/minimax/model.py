@@ -159,6 +159,7 @@ def rope_rotation_table(angles, dtype):
 _FP16_OUT_PROJ_SCALE = 64.0
 # fc2's output overflows by ~56x (measured peak 3.69e6).
 _FP16_FC2_SCALE = 256.0
+_FP16_MLP_CHUNK = 8192
 
 
 class Attention(nn.Module):
@@ -220,6 +221,17 @@ class MLP(nn.Module):
     def forward(self, x):
         if x.dtype != torch.float16:
             return comfy.ops.linear_input_act(self.fc2, self.fc1(x), "swiglu")
+        flat = x.reshape(-1, x.shape[-1])
+        if flat.shape[0] <= _FP16_MLP_CHUNK:
+            return self._forward_fp16(x)
+        # Bound the wide fp32 SwiGLU intermediates on long packed sequences.
+        out = torch.empty(flat.shape, dtype=torch.float32, device=x.device)
+        for start in range(0, flat.shape[0], _FP16_MLP_CHUNK):
+            end = start + _FP16_MLP_CHUNK
+            out[start:end] = self._forward_fp16(flat[start:end])
+        return out.reshape(x.shape)
+
+    def _forward_fp16(self, x):
         # the fused activation path cannot express fc2's input scale, so fp16 takes
         # the unfused branch; the swiglu is not exactly representable so it runs in fp32
         gate, up = self.fc1(x).chunk(2, dim=-1)
@@ -315,6 +327,7 @@ class DiTBlock(nn.Module):
         h = _mod_scale_shift(self.norm1(x), shift_msa, scale_msa, mod_segments).to(branch_dtype)
         att = attention(h, rope_freqs=rope_freqs, transformer_options=transformer_options)
         x = _mod_gate(x, gate_msa, att.to(x.dtype), mod_segments)
+        del h, att
         h = _mod_scale_shift(self.norm2(x), shift_mlp, scale_mlp, mod_segments).to(branch_dtype)
         return _mod_gate(x, gate_mlp, self.mlp(h).to(x.dtype), mod_segments)
 

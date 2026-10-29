@@ -187,6 +187,27 @@ def test_mlp_rescale_only_applies_to_fp16():
     assert make_mlp(torch.float32).forward(mlp_input(torch.float32)).dtype == torch.float32
 
 
+@pytest.mark.parametrize("shape", [(4,), (5,), (2, 5)])
+def test_fp16_mlp_bounds_projection_rows_and_preserves_values(monkeypatch, shape):
+    monkeypatch.setattr(minimax_model, "_FP16_MLP_CHUNK", 4)
+    mlp = make_mlp(torch.float16)
+    reference = make_mlp(torch.float32, mlp)
+    torch.manual_seed(16508)
+    x = (torch.randn(*shape, MLP_HIDDEN) * MLP_INPUT_SCALE).half()
+    expected = reference(x.float())
+    projection_rows = []
+    handle = mlp.fc1.register_forward_pre_hook(lambda module, args: projection_rows.append(args[0].reshape(-1, MLP_HIDDEN).shape[0]))
+    actual = mlp(x)
+    handle.remove()
+
+    assert max(projection_rows) <= 4
+    assert sum(projection_rows) == x.numel() // MLP_HIDDEN
+    assert actual.shape == x.shape
+    assert actual.dtype == torch.float32
+    assert torch.isfinite(actual).all()
+    assert (actual - expected).abs().max() <= 1e-3 * expected.abs().max()
+
+
 def test_dit_block_carries_residual_in_fp32_under_fp16():
     out = run_block(make_block(torch.float16), torch.float16)
 
