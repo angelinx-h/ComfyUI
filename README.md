@@ -377,6 +377,36 @@ To use a textual inversion concepts/embeddings in a text prompt put them in the 
 ```embedding:embedding_filename.pt```
 
 
+## MiniMax H3 FP16 on Turing: fork and Star7 comparison
+
+Reviewed 2 November 2026 for this fork's `minimax-h3-fp16` branch at
+`3882bdf79141366727570f9b6a7c51b4f246d734`.
+
+This branch includes native H3 FP16 protection: FP32 residuals and SwiGLU
+products, with power-of-two scaling around attention output and MLP projections.
+It also bounds FP16-path MLP work to 8,192 token rows per chunk and releases
+attention temporaries before the MLP to reduce peak memory on long videos.
+
+[MiniMax H3 FP16 Exact - Star7](https://github.com/star7code/minimax-h3-fp16-exact-star7/blob/main/README_EN.md)
+provides similar numerical protection through a custom loader and ModelPatcher
+wrappers, preserves eligible native INT8/ConvRot dispatch, and selects BF16 on
+SM80+ GPUs. It is a convenient alternative for an installation without native
+H3 FP16 protection. Its separate
+[activation chunking project](https://github.com/star7code/minimax-h3-chunk-star7)
+handles additional activation-memory optimizations. "Exact" describes the
+power-of-two scaling; it does not establish bitwise equivalence or better video
+quality.
+
+Keep this branch for the existing RTX 2060 12 GB deployment. Do not add Star7's
+FP16 wrappers unchanged: its reviewed `MLP.forward` replacement is unchunked and
+would bypass this branch's bounded MLP path unless another component restores
+chunking. Combining the implementations requires separate validation.
+
+Kitchen allocation fixes, SM75 kernel guards, launch settings, and learned
+upscaling in the deployment are maintained separately from this ComfyUI branch.
+Existing deployment timings do not compare Star7 against this fork; no matched
+benchmark establishes a speed or quality winner.
+
 ## How to show high-quality previews?
 
 Use ```--preview-method auto``` to enable previews.
